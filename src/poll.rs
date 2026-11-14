@@ -8,8 +8,8 @@ struct Level {
     data: [u8; 4096],
 }
 impl Level {
-    const EMPTY: Self = Self {
-        fd: -1,
+    const ZERO: Self = Self {
+        fd: 0,
         pos: 0,
         end: 0,
         data: [0; 4096],
@@ -359,7 +359,11 @@ pub fn run() -> Result<i32> {
     path.append(b"/sys/fs/cgroup")?;
     path.append(group.data())?;
     // Fixed storage is initialized before the first pass and reused thereafter.
-    let mut levels = [Level::EMPTY; DEPTH];
+    let mut levels = [Level::ZERO; DEPTH];
+    // Set every descriptor to the unused value before scanning or cleanup.
+    for level in &mut levels {
+        level.fd = -1;
+    }
     let mut input = [0u8; 8192];
     put(2, b"Steam priority: native Rust, nice=-19, interval=2s.\n");
     let mut deadline = now();
