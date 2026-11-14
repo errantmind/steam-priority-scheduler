@@ -6,7 +6,7 @@ The policy covers Steam, web helpers, downloads, Proton, Wine, games, and their 
 
 ## Measured overhead
 
-Across four 16-second runs with a 129-thread test workload on an Intel Core i7-7700K, the poller used **212 KiB of resident memory** and averaged **0.0048% of one logical CPU**.
+Across four 16-second runs with a 129-thread test workload on an Intel Core i7-7700K, the poller used **204 KiB of resident memory** and averaged **0.0045% of one logical CPU**.
 
 ## Requirements
 
@@ -94,7 +94,7 @@ The root directory and `cgroup.events` descriptors are reused between passes. A 
 
 The launcher serializes simultaneous requests and forwards subsequent arguments through Steam's command interface. Arguments remain separate, and the selected display, locale, PATH, and XDG environment values are preserved.
 
-The executable is approximately 44 KiB. Its storage limits are 32 nested cgroup levels, 4096-byte path buffers, and 255 launch arguments including systemd options. Buffer overflow returns an error. The launcher uses the installed systemd and Steam forwarding commands.
+The executable is approximately 42 KiB. Its storage limits are 32 nested cgroup levels, 4096-byte path buffers, and 255 launch arguments including systemd options. Buffer overflow returns an error. The launcher uses the installed systemd and Steam forwarding commands.
 
 CPU affinity, scheduling classes, and cgroup CPU weights stay unchanged.
 
