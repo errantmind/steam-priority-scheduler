@@ -1,0 +1,16 @@
+#!/usr/bin/env bash
+# Internal build helper; called by install and tests.
+set -euo pipefail
+cd -- "$(dirname -- "$0")/.."
+compiler=$1
+output=$2
+sysroot=$("$compiler" --print sysroot)
+linker=$sysroot/lib/rustlib/x86_64-unknown-linux-gnu/bin/rust-lld
+if [[ ! -x $linker ]]; then
+    printf 'The Rust installation must include rust-lld.\n' >&2
+    exit 1
+fi
+"$compiler" --edition=2021 --target=x86_64-unknown-linux-gnu -D warnings \
+    -C opt-level=s -C panic=abort -C lto=yes -C relocation-model=static \
+    -C linker="$linker" -C linker-flavor=ld.lld -C link-arg=--build-id=none \
+    --remap-path-prefix="$PWD"=steam-high-priority src/main.rs -o "$output"

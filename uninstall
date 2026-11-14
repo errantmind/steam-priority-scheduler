@@ -1,0 +1,47 @@
+#!/usr/bin/env bash
+set -Eeuo pipefail
+ENTRY=$(readlink -f -- "$0")
+REPO=$(dirname -- "$ENTRY")
+source "$REPO/scripts/common.sh"
+require_root "$@"
+load_manifest
+if [[ -z $OLD_SOURCE ]]; then
+    printf 'steam-high-priority is already absent.\n'
+    exit 0
+fi
+
+# Do not terminate games or leave their existing -19 priorities hidden from the user.
+while IFS= read -r -d '' group; do
+    if grep -qx 'populated 1' "$group/cgroup.events"; then
+        die 'Close all Steam sessions started by steam-high-priority, then run ./uninstall again.'
+    fi
+done < <(find /sys/fs/cgroup -type d -name steam-high-priority-session.service -print0 2>/dev/null)
+for path in "${FILES[@]}" "${LINKS[@]}"; do
+    if exists "$path"; then
+        old_matches "$path" || die "Installed file was modified: $path. Run ./install to repair it before removal."
+    fi
+done
+make_work
+begin_transaction
+if [[ -f $PREFIX/manager-limits.tsv ]]; then
+    while IFS=$'\t' read -r pid stamp soft hard appliedsoft appliedhard extra; do
+        [[ -z $pid ]] && continue
+        [[ $pid =~ ^[1-9][0-9]*$ && $stamp =~ ^[0-9]+$ && -z $extra ]] || die 'Invalid saved manager identity.'
+        for value in "$soft" "$hard" "$appliedsoft" "$appliedhard"; do valid_limit "$value" || die 'Invalid saved manager limit.'; done
+        [[ $(start_time "$pid" 2>/dev/null) == "$stamp" ]] || continue
+        read -r nowsoft nowhard < <(limit_pair "$pid")
+        # Keep a later administrator change.
+        [[ $nowsoft:$nowhard == "$appliedsoft:$appliedhard" ]] || continue
+        record_limit_change "$pid" "$stamp" "$nowsoft" "$nowhard" "$soft" "$hard"
+    done < "$PREFIX/manager-limits.tsv"
+fi
+for path in "${TARGETS[@]}"; do
+    if exists "$path"; then rm -- "$path"; fi
+    [[ $path != "$UNIT" && $path != "$DROPIN" ]] || RELOAD=1
+done
+reload_managers
+TRANSACTION=0
+rmdir -- "$PREFIX" 2>/dev/null || true
+rmdir -- /etc/systemd/system/user@.service.d 2>/dev/null || true
+printf 'steam-high-priority is removed. Steam and game data are unchanged.\n'
+printf 'User managers created after installation receive their normal limits at their next login.\n'

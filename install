@@ -1,0 +1,114 @@
+#!/usr/bin/env bash
+set -Eeuo pipefail
+ENTRY=$(readlink -f -- "$0")
+REPO=$(dirname -- "$ENTRY")
+source "$REPO/scripts/common.sh"
+require_root "$@"
+
+[[ $(uname -s) == Linux && $(uname -m) == x86_64 ]] || die 'Linux x86-64 is required.'
+[[ $(stat -fc %T /sys/fs/cgroup) == cgroup2fs && -d /run/systemd/system ]] || die 'systemd and cgroup v2 are required.'
+version=$(systemctl --version); version=${version#systemd }; version=${version%% *}
+[[ $version =~ ^[0-9]+$ ]] && ((version >= 250)) || die 'systemd 250 or newer is required.'
+for cmd in readelf nm cut sed systemd-run; do need "$cmd"; done
+run_help=$(systemd-run --help)
+[[ $run_help == *--expand-environment* && $run_help == *--collect* ]] || die 'This systemd-run lacks required launch features.'
+load_manifest
+
+STEAM=
+for candidate in /usr/bin/steam /usr/games/steam; do
+    if [[ -x $candidate ]]; then STEAM=$candidate; break; fi
+done
+[[ -n $STEAM ]] || die 'Install native Steam first. Flatpak and Snap are not supported.'
+resolved=$(readlink -f -- "$STEAM")
+[[ $resolved != "$PREFIX/"* ]] || die 'The distribution Steam launcher points back to this project.'
+
+# Detect earlier user-local launchers instead of leaving the system wrapper unused.
+builder=${SUDO_USER:-root}
+entry=$(getent passwd "$builder")
+[[ -n $entry ]] || die 'Cannot identify the build account.'
+IFS=: read -r _ _ builder_uid builder_gid _ builder_home _ <<< "$entry"
+if [[ $builder != root ]]; then
+    for candidate in "$builder_home/.local/bin/steam" "$builder_home/bin/steam" \
+        "$builder_home/.config/systemd/user/steam-high-priority.service"; do
+        ! exists "$candidate" || die "Move the existing user override before installing: $candidate"
+    done
+fi
+
+fingerprint=$({ printf 'steam-high-priority build format 1\n'; for f in src/main.rs src/sys.rs src/poll.rs src/launch.rs scripts/build; do sha256sum "$REPO/$f" | cut -d ' ' -f1; done; } | sha256sum | cut -d ' ' -f1)
+make_work
+if [[ $OLD_SOURCE == "$fingerprint" ]] && old_matches "$PREFIX/steam-high-priority"; then
+    cp -- "$PREFIX/steam-high-priority" "$WORK/desired/binary"
+    compiler_version=$OLD_COMPILER
+else
+    if [[ $builder == root ]]; then
+        compiler=$(command -v rustc || true)
+        [[ -n $compiler ]] || die 'Rust is required. Run ./install from the account with Rust installed.'
+        compiler_version=$("$compiler" --version)
+    else
+        compiler=$(runuser -u "$builder" -- env HOME="$builder_home" PATH="$builder_home/.cargo/bin:/usr/local/bin:/usr/bin:/bin" /bin/sh -c 'command -v rustc') || die 'Rust was not found in the invoking account.'
+        compiler_version=$(runuser -u "$builder" -- env HOME="$builder_home" "$compiler" --version)
+    fi
+    BUILD_DIR=$(mktemp -d /tmp/steam-high-priority-build.XXXXXXXX)
+    mkdir "$BUILD_DIR/src" "$BUILD_DIR/scripts"
+    cp -- "$REPO"/src/*.rs "$BUILD_DIR/src/"
+    cp -- "$REPO/scripts/build" "$BUILD_DIR/scripts/"
+    if [[ $builder != root ]]; then
+        chown -R "$builder_uid:$builder_gid" "$BUILD_DIR"
+        runuser -u "$builder" -- env HOME="$builder_home" /bin/bash "$BUILD_DIR/scripts/build" "$compiler" "$BUILD_DIR/binary"
+    else /bin/bash "$BUILD_DIR/scripts/build" "$compiler" "$BUILD_DIR/binary"; fi
+    [[ -f $BUILD_DIR/binary && ! -L $BUILD_DIR/binary ]] || die 'The build did not produce a regular executable.'
+    cp -- "$BUILD_DIR/binary" "$WORK/desired/binary"
+fi
+readelf -h "$WORK/desired/binary" | grep -q 'Advanced Micro Devices X86-64' || die 'Unexpected executable architecture.'
+if readelf -l "$WORK/desired/binary" | grep -q INTERP || readelf -d "$WORK/desired/binary" | grep -q NEEDED; then die 'The runtime must be static.'; fi
+[[ -z $(nm -u "$WORK/desired/binary") ]] || die 'The runtime contains unresolved symbols.'
+if nm "$WORK/desired/binary" | grep -Eq '__rust_alloc|__rg_alloc| malloc$| calloc$| realloc$'; then die 'The runtime contains an allocator.'; fi
+
+printf '%s\n' "$STEAM" > "$WORK/desired/steam-path"
+cp -- "$REPO/systemd/steam-high-priority.service" "$WORK/desired/unit"
+soft=$(systemctl show user@0.service -p LimitNICESoft --value)
+hard=$(systemctl show user@0.service -p LimitNICE --value)
+soft=$(raise_limit "$soft"); hard=$(raise_limit "$hard")
+soft=${soft/unlimited/infinity}; hard=${hard/unlimited/infinity}
+sed -e "s/@SOFT@/$soft/" -e "s/@HARD@/$hard/" "$REPO/systemd/user-manager.conf" > "$WORK/desired/dropin"
+if exists "$PREFIX/manager-limits.tsv"; then
+    old_matches "$PREFIX/manager-limits.tsv" || die 'The saved manager-limit records were modified.'
+    cp -- "$PREFIX/manager-limits.tsv" "$WORK/desired/limits"
+else : > "$WORK/desired/limits"; fi
+
+# Save original runtime limits once per manager identity. Restore them on uninstall.
+manager_list
+begin_transaction
+for uid in "${MANAGERS[@]}"; do
+    pid=$(systemctl show "user@$uid.service" -p MainPID --value)
+    [[ $pid =~ ^[1-9][0-9]*$ ]] || continue
+    stamp=$(start_time "$pid") || continue
+    read -r oldsoft oldhard < <(limit_pair "$pid")
+    newsoft=$(raise_limit "$oldsoft"); newhard=$(raise_limit "$oldhard")
+    if [[ $oldsoft:$oldhard != "$newsoft:$newhard" ]]; then
+        # Keep the first original values even if an administrator later reduces the allowance.
+        if ! grep -q $'^'"$pid"$'\t'"$stamp"$'\t' "$WORK/desired/limits"; then
+            printf '%s\t%s\t%s\t%s\t%s\t%s\n' "$pid" "$stamp" "$oldsoft" "$oldhard" "$newsoft" "$newhard" >> "$WORK/desired/limits"
+        fi
+        record_limit_change "$pid" "$stamp" "$oldsoft" "$oldhard" "$newsoft" "$newhard"
+    fi
+done
+
+put_file "$WORK/desired/binary" "$PREFIX/steam-high-priority" 755
+put_file "$WORK/desired/steam-path" "$PREFIX/steam-path" 644
+put_file "$WORK/desired/unit" "$UNIT" 644
+put_file "$WORK/desired/dropin" "$DROPIN" 644
+put_file "$WORK/desired/limits" "$PREFIX/manager-limits.tsv" 644
+put_link "$PREFIX/steam-session" steam-high-priority
+put_link "$PREFIX/steam-priority" steam-high-priority
+put_link "$LAUNCHER" "$PREFIX/steam-session"
+{
+    printf 'format\t1\nsource\t%s\ncompiler\t%s\n' "$fingerprint" "$compiler_version"
+    for path in "${FILES[@]}"; do printf 'file\t%s\t%s\t%s\n' "$(stat -c %a "$path")" "$(hash "$path")" "$path"; done
+    for path in "${LINKS[@]}"; do printf 'link\t-\t%s\t%s\n' "$(readlink -- "$path")" "$path"; done
+} > "$WORK/desired/manifest"
+put_file "$WORK/desired/manifest" "$MANIFEST" 644
+if ((RELOAD)); then reload_managers; fi
+TRANSACTION=0
+printf 'steam-high-priority is installed and verified.\nLaunch Steam with: steam\n'
+printf 'Close an existing unmanaged Steam session before using the new launcher.\n'
