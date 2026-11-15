@@ -2,8 +2,6 @@
 
 Run Steam games and their supporting processes at nice **−19**. A small Rust poller checks Steam application scopes every **two seconds** and corrects thread priorities changed by Wine or a game.
 
-Steam starts at normal priority. Its client and web helpers retain their own priority settings. Games and Proton/Wine processes are covered in separate application scopes or, through application-marker checks, inside the Steam client group. The policy uses one static executable with fixed-size memory and native Linux syscalls.
-
 ## Performance design
 
 - **Static `no_std` Rust executable** with direct Linux syscalls and no libc or shared-library dependencies.
