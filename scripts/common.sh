@@ -3,12 +3,12 @@
 set -Eeuo pipefail
 umask 022
 export LC_ALL=C
-PREFIX=/usr/local/libexec/steam-high-priority
+PREFIX=/usr/local/libexec/steam-priority-scheduler
 MANIFEST=$PREFIX/install.manifest
-UNIT=/etc/systemd/user/steam-high-priority.service
-DROPIN=/etc/systemd/system/user@.service.d/50-steam-high-priority.conf
+UNIT=/etc/systemd/user/steam-priority-scheduler.service
+DROPIN=/etc/systemd/system/user@.service.d/50-steam-priority-scheduler.conf
 LAUNCHER=/usr/local/bin/steam
-FILES=("$PREFIX/steam-high-priority" "$PREFIX/steam-path" "$UNIT" "$DROPIN" "$PREFIX/manager-limits.tsv")
+FILES=("$PREFIX/steam-priority-scheduler" "$PREFIX/steam-path" "$UNIT" "$DROPIN" "$PREFIX/manager-limits.tsv")
 LINKS=("$PREFIX/steam-session" "$PREFIX/steam-priority" "$LAUNCHER")
 TARGETS=("${FILES[@]}" "${LINKS[@]}" "$MANIFEST")
 declare -A OLD_KIND=() OLD_MODE=() OLD_VALUE=()
@@ -17,7 +17,7 @@ WORK= BUILD_DIR= TRANSACTION=0 RELOAD=0
 CREATED_DIRS=()
 MANAGERS=()
 
-die() { printf 'steam-high-priority: %s\n' "$*" >&2; exit 1; }
+die() { printf 'steam-priority-scheduler: %s\n' "$*" >&2; exit 1; }
 need() { command -v "$1" >/dev/null || die "Required command is missing: $1"; }
 require_root() {
     (($# == 0)) || die 'This script takes no arguments.'
@@ -26,12 +26,16 @@ require_root() {
         exec sudo -- /bin/bash "$ENTRY"
     fi
     for cmd in flock mktemp stat sha256sum cmp install cp mv readlink systemctl prlimit getent runuser; do need "$cmd"; done
-    safe_parents /run/steam-high-priority/lock
-    if ! exists /run/steam-high-priority; then mkdir -m 700 /run/steam-high-priority; fi
-    [[ -d /run/steam-high-priority && ! -L /run/steam-high-priority && $(stat -c %u:%a /run/steam-high-priority) == 0:700 ]] || die 'Unsafe installer lock directory.'
-    [[ ! -L /run/steam-high-priority/lock ]] || die 'Unsafe installer lock.'
-    exec 9<>/run/steam-high-priority/lock
+    lock_directory /run/steam-priority-scheduler
+    exec 9<>/run/steam-priority-scheduler/lock
     flock -x 9
+}
+lock_directory() {
+    local dir=$1
+    safe_parents "$dir/lock"
+    mkdir -p -m 700 -- "$dir"
+    [[ -d $dir && ! -L $dir && $(stat -c %u:%a "$dir") == 0:700 ]] || die 'Unsafe installer lock directory.'
+    [[ ! -L $dir/lock ]] || die 'Unsafe installer lock.'
 }
 exists() { [[ -e $1 || -L $1 ]]; }
 hash() { sha256sum -- "$1" | cut -d ' ' -f 1; }
@@ -69,7 +73,7 @@ load_manifest() {
                 if [[ $kind == file ]]; then
                     [[ $mode =~ ^(644|755)$ && $value =~ ^[0-9a-f]{64}$ ]] || die 'Invalid file record.'
                 else
-                    [[ $mode == - && ( $value == steam-high-priority || $value == "$PREFIX/steam-session" ) ]] || die 'Invalid link record.'
+                    [[ $mode == - && ( $value == "${PREFIX##*/}" || $value == "$PREFIX/steam-session" ) ]] || die 'Invalid link record.'
                 fi
                 OLD_KIND["$path"]=$kind; OLD_MODE["$path"]=$mode; OLD_VALUE["$path"]=$value ;;
             *) die 'Invalid installation manifest.' ;;
@@ -136,7 +140,7 @@ reload_managers() {
     done
 }
 make_work() {
-    WORK=$(mktemp -d /var/tmp/steam-high-priority.XXXXXXXX)
+    WORK=$(mktemp -d /var/tmp/steam-priority-scheduler.XXXXXXXX)
     chmod 700 "$WORK"
     mkdir "$WORK/desired" "$WORK/before"
 }

@@ -58,7 +58,7 @@ jobs:
             echo "A release already exists for $RELEASE_TAG. Existing assets are preserved." >&2
             exit 1
           fi
-          archive="steam-high-priority-$RELEASE_TAG-linux-x86_64.tar.gz"
+          archive="steam-priority-scheduler-$RELEASE_TAG-linux-x86_64.tar.gz"
           cat > "$RUNNER_TEMP/release-notes.md" <<EOF
           Prebuilt static Linux x86-64 release. The archive includes the corresponding source and AGPL-3.0 license.
 
@@ -68,7 +68,7 @@ jobs:
           \`\`\`bash
           sha256sum --check SHA256SUMS
           tar -xzf "$archive"
-          cd steam-high-priority
+          cd steam-priority-scheduler
           ./install
           \`\`\`
 
@@ -82,5 +82,5 @@ jobs:
           EOF
           gh release create "$RELEASE_TAG" \
             "build/release/$archive" build/release/SHA256SUMS \
-            --verify-tag --draft --title "steam-high-priority $RELEASE_TAG" \
+            --verify-tag --draft --title "steam-priority-scheduler $RELEASE_TAG" \
             --notes-file "$RUNNER_TEMP/release-notes.md"

@@ -4,7 +4,7 @@
 source_fingerprint() {
     local root=$1 file
     {
-        printf 'steam-high-priority build format 1\n'
+        printf 'steam-priority-scheduler build format 1\n'
         for file in src/main.rs src/sys.rs src/dirent.rs src/game.rs src/poll.rs src/launch.rs scripts/build; do
             sha256sum "$root/$file" | cut -d ' ' -f1 || return 1
         done

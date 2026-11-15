@@ -5,7 +5,7 @@ export LC_ALL=C
 umask 022
 REPO=$(cd -- "$(dirname -- "$0")/.." && pwd -P)
 cd -- "$REPO"
-die() { printf 'steam-high-priority package: %s\n' "$*" >&2; exit 1; }
+die() { printf 'steam-priority-scheduler package: %s\n' "$*" >&2; exit 1; }
 (($# == 1)) || die 'Usage: scripts/package vMAJOR.MINOR.PATCH'
 version=$1
 [[ $version =~ ^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ ]] || die 'Use a version such as v0.1.0.'
@@ -21,29 +21,29 @@ output=$REPO/build/release
 mkdir -p "$output"
 work=$(mktemp -d "$REPO/build/.release.XXXXXXXX")
 trap 'rm -rf -- "$work"' EXIT
-project=$work/steam-high-priority
+project=$work/steam-priority-scheduler
 mkdir -p "$project/bin"
 # Publish only the application, its source/build recipe, and installation files.
 files=(install uninstall README.md LICENSE src/*.rs scripts/build scripts/common.sh
-       scripts/artifacts.sh scripts/package systemd/steam-high-priority.service
+       scripts/artifacts.sh scripts/package systemd/steam-priority-scheduler.service
        systemd/user-manager.conf .github/workflows/release.yml)
 for file in "${files[@]}"; do
     [[ -f $file && ! -L $file ]] || die "Missing or invalid package input: $file"
 done
 cp --parents -- "${files[@]}" "$project/"
-"$project/scripts/build" "$compiler" "$project/bin/steam-high-priority"
-chmod 755 "$project/bin/steam-high-priority"
-verify_binary "$project/bin/steam-high-priority"
+"$project/scripts/build" "$compiler" "$project/bin/steam-priority-scheduler"
+chmod 755 "$project/bin/steam-priority-scheduler"
+verify_binary "$project/bin/steam-priority-scheduler"
 fingerprint=$(source_fingerprint "$project") || die 'Cannot fingerprint the runtime sources.'
-binary_hash=$(sha256sum "$project/bin/steam-high-priority" | cut -d ' ' -f1)
+binary_hash=$(sha256sum "$project/bin/steam-priority-scheduler" | cut -d ' ' -f1)
 {
     printf 'format\t1\nversion\t%s\ncommit\t%s\ntarget\tx86_64-unknown-linux-gnu\n' "$version" "$commit"
     printf 'compiler\t%s\nsource\t%s\nbinary\t%s\n' "$compiler_version" "$fingerprint" "$binary_hash"
 } > "$project/build-info"
 read_build_info "$project/build-info"
-archive=steam-high-priority-$version-linux-x86_64.tar.gz
+archive=steam-priority-scheduler-$version-linux-x86_64.tar.gz
 tar --sort=name --mtime="@$epoch" --owner=0 --group=0 --numeric-owner \
-    --mode=u+rwX,go+rX,go-w --format=gnu -C "$work" -cf - steam-high-priority \
+    --mode=u+rwX,go+rX,go-w --format=gnu -C "$work" -cf - steam-priority-scheduler \
     | gzip -n > "$work/$archive"
 (cd -- "$work" && sha256sum "$archive") > "$work/SHA256SUMS"
 mv -f -- "$work/$archive" "$output/$archive"

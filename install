@@ -30,22 +30,22 @@ entry=$(getent passwd "$builder")
 IFS=: read -r _ _ builder_uid builder_gid _ builder_home _ <<< "$entry"
 if [[ $builder != root ]]; then
     for candidate in "$builder_home/.local/bin/steam" "$builder_home/bin/steam" \
-        "$builder_home/.config/systemd/user/steam-high-priority.service"; do
+        "$builder_home/.config/systemd/user/steam-priority-scheduler.service"; do
         ! exists "$candidate" || die "Move the existing user override before installing: $candidate"
     done
 fi
 
 fingerprint=$(source_fingerprint "$REPO") || die 'Cannot fingerprint the runtime sources.'
 make_work
-if exists "$REPO/build-info" || exists "$REPO/bin/steam-high-priority"; then
+if exists "$REPO/build-info" || exists "$REPO/bin/steam-priority-scheduler"; then
     read_build_info "$REPO/build-info"
     [[ $RELEASE_SOURCE == "$fingerprint" ]] || die 'Release sources do not match build-info. Extract a fresh release archive.'
-    [[ -f $REPO/bin/steam-high-priority && ! -L $REPO/bin/steam-high-priority ]] || die 'The release binary is missing or invalid.'
-    cp -- "$REPO/bin/steam-high-priority" "$WORK/desired/binary"
+    [[ -f $REPO/bin/steam-priority-scheduler && ! -L $REPO/bin/steam-priority-scheduler ]] || die 'The release binary is missing or invalid.'
+    cp -- "$REPO/bin/steam-priority-scheduler" "$WORK/desired/binary"
     [[ $(hash "$WORK/desired/binary") == "$RELEASE_BINARY" ]] || die 'Release binary checksum mismatch. Extract a fresh release archive.'
     compiler_version=$RELEASE_COMPILER
-elif [[ $OLD_SOURCE == "$fingerprint" ]] && old_matches "$PREFIX/steam-high-priority"; then
-    cp -- "$PREFIX/steam-high-priority" "$WORK/desired/binary"
+elif [[ $OLD_SOURCE == "$fingerprint" ]] && old_matches "$PREFIX/steam-priority-scheduler"; then
+    cp -- "$PREFIX/steam-priority-scheduler" "$WORK/desired/binary"
     compiler_version=$OLD_COMPILER
 else
     if [[ $builder == root ]]; then
@@ -56,7 +56,7 @@ else
         compiler=$(runuser -u "$builder" -- env HOME="$builder_home" PATH="$builder_home/.cargo/bin:/usr/local/bin:/usr/bin:/bin" /bin/sh -c 'command -v rustc') || die 'Rust was not found in the invoking account.'
         compiler_version=$(runuser -u "$builder" -- env HOME="$builder_home" "$compiler" --version)
     fi
-    BUILD_DIR=$(mktemp -d /tmp/steam-high-priority-build.XXXXXXXX)
+    BUILD_DIR=$(mktemp -d /tmp/steam-priority-scheduler-build.XXXXXXXX)
     mkdir "$BUILD_DIR/src" "$BUILD_DIR/scripts"
     cp -- "$REPO"/src/*.rs "$BUILD_DIR/src/"
     cp -- "$REPO/scripts/build" "$BUILD_DIR/scripts/"
@@ -70,7 +70,7 @@ fi
 verify_binary "$WORK/desired/binary"
 
 printf '%s\n' "$STEAM" > "$WORK/desired/steam-path"
-cp -- "$REPO/systemd/steam-high-priority.service" "$WORK/desired/unit"
+cp -- "$REPO/systemd/steam-priority-scheduler.service" "$WORK/desired/unit"
 soft=$(systemctl show user@0.service -p LimitNICESoft --value)
 hard=$(systemctl show user@0.service -p LimitNICE --value)
 soft=$(raise_limit "$soft"); hard=$(raise_limit "$hard")
@@ -99,13 +99,13 @@ for uid in "${MANAGERS[@]}"; do
     fi
 done
 
-put_file "$WORK/desired/binary" "$PREFIX/steam-high-priority" 755
+put_file "$WORK/desired/binary" "$PREFIX/steam-priority-scheduler" 755
 put_file "$WORK/desired/steam-path" "$PREFIX/steam-path" 644
 put_file "$WORK/desired/unit" "$UNIT" 644
 put_file "$WORK/desired/dropin" "$DROPIN" 644
 put_file "$WORK/desired/limits" "$PREFIX/manager-limits.tsv" 644
-put_link "$PREFIX/steam-session" steam-high-priority
-put_link "$PREFIX/steam-priority" steam-high-priority
+put_link "$PREFIX/steam-session" steam-priority-scheduler
+put_link "$PREFIX/steam-priority" steam-priority-scheduler
 put_link "$LAUNCHER" "$PREFIX/steam-session"
 {
     printf 'format\t1\nsource\t%s\ncompiler\t%s\n' "$fingerprint" "$compiler_version"
@@ -115,5 +115,5 @@ put_link "$LAUNCHER" "$PREFIX/steam-session"
 put_file "$WORK/desired/manifest" "$MANIFEST" 644
 if ((RELOAD)); then reload_managers; fi
 TRANSACTION=0
-printf 'steam-high-priority is installed and verified.\nLaunch Steam with: steam\n'
+printf 'steam-priority-scheduler is installed and verified.\nLaunch Steam with: steam\n'
 printf 'Close an existing unmanaged Steam session before using the new launcher.\n'

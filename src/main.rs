@@ -5,7 +5,7 @@
     target_arch = "x86_64",
     target_pointer_width = "64"
 )))]
-compile_error!("steam-high-priority requires Linux x86-64.");
+compile_error!("steam-priority-scheduler requires Linux x86-64.");
 mod dirent;
 mod game;
 mod launch;

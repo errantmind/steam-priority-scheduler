@@ -1,4 +1,4 @@
-# steam-high-priority
+# steam-priority-scheduler
 
 Run Steam games and their supporting processes at nice **−19**. A small Rust poller checks Steam application scopes every **two seconds** and corrects thread priorities changed by Wine or a game.
 
@@ -26,7 +26,7 @@ In an 8-second test with 129 game threads in one application scope and 20 unrela
 
 ## Install
 
-Download the Linux x86-64 archive and `SHA256SUMS` from [GitHub Releases](https://github.com/errantmind/steam-high-priority/releases). Save both files in the same directory. For `v0.1.0`:
+Download the Linux x86-64 archive and `SHA256SUMS` from [GitHub Releases](https://github.com/errantmind/steam-priority-scheduler/releases). Save both files in the same directory. Release `v0.1.0` uses the original package name:
 
 ```sh
 sha256sum --check SHA256SUMS
@@ -60,8 +60,8 @@ Commands and shortcuts that call `/usr/bin/steam` directly bypass the managed la
 Source builds require Rust with the x86-64 GNU target and `rust-lld`, as supplied by a normal rustup installation.
 
 ```sh
-git clone https://github.com/errantmind/steam-high-priority.git
-cd steam-high-priority
+git clone https://github.com/errantmind/steam-priority-scheduler.git
+cd steam-priority-scheduler
 ./install
 ```
 
@@ -100,12 +100,12 @@ Open a new terminal afterward to refresh the shell's command lookup.
 ```text
 systemd --user
 └── app.slice
-    ├── steam-high-priority-session.service  starts at nice 0
+    ├── steam-priority-scheduler-session.service  starts at nice 0
     │   ├── Steam and web helpers            retain their priorities
     │   └── Fallback games / Proton / Wine   corrected to −19
     ├── app-steam-app<appid>-<pid>.scope      game threads corrected to −19
     │   └── Game / Proton / Wine
-    └── steam-high-priority.service          nice +10
+    └── steam-priority-scheduler.service          nice +10
         └── thread priority poller
 ```
 
@@ -132,22 +132,22 @@ CPU affinity, scheduling classes, and cgroup CPU weights stay unchanged.
 | Path | Purpose |
 |---|---|
 | `/usr/local/bin/steam` | Terminal/window-manager entry point |
-| `/usr/local/libexec/steam-high-priority/steam-high-priority` | Static Rust executable |
-| `/usr/local/libexec/steam-high-priority/steam-session` | Launcher link |
-| `/usr/local/libexec/steam-high-priority/steam-priority` | Poller link |
-| `/usr/local/libexec/steam-high-priority/steam-path` | Distribution Steam launcher path |
-| `/usr/local/libexec/steam-high-priority/install.manifest` | Source fingerprint, build record, file hashes, permissions, and links |
-| `/usr/local/libexec/steam-high-priority/manager-limits.tsv` | Original runtime limits and manager identities |
-| `/etc/systemd/user/steam-high-priority.service` | User polling service |
-| `/etc/systemd/system/user@.service.d/50-steam-high-priority.conf` | User-manager nice allowance |
+| `/usr/local/libexec/steam-priority-scheduler/steam-priority-scheduler` | Static Rust executable |
+| `/usr/local/libexec/steam-priority-scheduler/steam-session` | Launcher link |
+| `/usr/local/libexec/steam-priority-scheduler/steam-priority` | Poller link |
+| `/usr/local/libexec/steam-priority-scheduler/steam-path` | Distribution Steam launcher path |
+| `/usr/local/libexec/steam-priority-scheduler/install.manifest` | Source fingerprint, build record, file hashes, permissions, and links |
+| `/usr/local/libexec/steam-priority-scheduler/manager-limits.tsv` | Original runtime limits and manager identities |
+| `/etc/systemd/user/steam-priority-scheduler.service` | User polling service |
+| `/etc/systemd/system/user@.service.d/50-steam-priority-scheduler.conf` | User-manager nice allowance |
 
-Installation and removal share a root-owned lock under `/run/steam-high-priority/`.
+Installation and removal share a root-owned lock under `/run/steam-priority-scheduler/`.
 
 ## Status
 
 ```sh
-systemctl --user status steam-high-priority-session.service steam-high-priority.service
-journalctl --user -u steam-high-priority.service
+systemctl --user status steam-priority-scheduler-session.service steam-priority-scheduler.service
+journalctl --user -u steam-priority-scheduler.service
 ```
 
 Steam starts when you launch it. After the client and all recognized game groups are empty, the poller becomes inactive.

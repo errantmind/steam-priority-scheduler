@@ -6,18 +6,18 @@ source "$REPO/scripts/common.sh"
 require_root "$@"
 load_manifest
 if [[ -z $OLD_SOURCE ]]; then
-    printf 'steam-high-priority is already absent.\n'
+    printf 'steam-priority-scheduler is already absent.\n'
     exit 0
 fi
 
 # Do not terminate games or leave their existing -19 priorities hidden from the user.
 while IFS= read -r -d '' group; do
     name=${group##*/}
-    [[ $name == steam-high-priority-session.service || $name =~ ^app-steam-app[0-9]+-[0-9]+\.scope$ ]] || continue
+    [[ $name == steam-priority-scheduler-session.service || $name =~ ^app-steam-app[0-9]+-[0-9]+\.scope$ ]] || continue
     if grep -qx 'populated 1' "$group/cgroup.events"; then
         die 'Close Steam and its games, then run ./uninstall again.'
     fi
-done < <(find /sys/fs/cgroup -type d \( -name steam-high-priority-session.service -o -name 'app-steam-app*.scope' \) -print0 2>/dev/null)
+done < <(find /sys/fs/cgroup -type d \( -name steam-priority-scheduler-session.service -o -name 'app-steam-app*.scope' \) -print0 2>/dev/null)
 for path in "${FILES[@]}" "${LINKS[@]}"; do
     if exists "$path"; then
         old_matches "$path" || die "Installed file was modified: $path. Run ./install to repair it before removal."
@@ -31,9 +31,9 @@ for uid in "${MANAGERS[@]}"; do
     name=$(getent passwd "$uid" | cut -d: -f1)
     [[ -n $name ]] || die "Cannot identify user manager $uid."
     if runuser -u "$name" -- env XDG_RUNTIME_DIR="/run/user/$uid" DBUS_SESSION_BUS_ADDRESS="unix:path=/run/user/$uid/bus" \
-        /usr/bin/systemctl --user is-active --quiet steam-high-priority.service; then
+        /usr/bin/systemctl --user is-active --quiet steam-priority-scheduler.service; then
         runuser -u "$name" -- env XDG_RUNTIME_DIR="/run/user/$uid" DBUS_SESSION_BUS_ADDRESS="unix:path=/run/user/$uid/bus" \
-            /usr/bin/systemctl --user stop steam-high-priority.service
+            /usr/bin/systemctl --user stop steam-priority-scheduler.service
     fi
 done
 make_work
@@ -58,5 +58,5 @@ reload_managers
 TRANSACTION=0
 rmdir -- "$PREFIX" 2>/dev/null || true
 rmdir -- /etc/systemd/system/user@.service.d 2>/dev/null || true
-printf 'steam-high-priority is removed. Steam and game data are unchanged.\n'
+printf 'steam-priority-scheduler is removed. Steam and game data are unchanged.\n'
 printf 'User managers created after installation receive their normal limits at their next login.\n'

@@ -444,9 +444,9 @@ pub fn run() -> Result<i32> {
         .find(|s| s.starts_with(b"0::"))
         .ok_or("cgroup v2 is required.")?;
     let own = &own[3..];
-    let suffix = b"/steam-high-priority.service";
+    let suffix = b"/steam-priority-scheduler.service";
     if !own.ends_with(suffix) {
-        return Err("Run this poller through steam-high-priority.service.");
+        return Err("Run this poller through steam-priority-scheduler.service.");
     }
     let mut group = Buffer::<4096>::new();
     group.append(&own[..own.len() - suffix.len()])?;
@@ -471,8 +471,8 @@ pub fn run() -> Result<i32> {
         let mut issue = None;
         group.truncate(parent_len);
         path.truncate(parent_path_len);
-        group.append(b"/steam-high-priority-session.service")?;
-        path.append(b"/steam-high-priority-session.service")?;
+        group.append(b"/steam-priority-scheduler-session.service")?;
+        path.append(b"/steam-priority-scheduler-session.service")?;
         let client_alive = match cache.pass(path.ptr(), |directory| {
             scan(
                 directory,

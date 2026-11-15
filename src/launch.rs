@@ -123,7 +123,7 @@ unsafe fn state(env: *const *const u8) -> Result<State> {
         b"/usr/bin/systemctl\0".as_slice(),
         b"--user\0",
         b"show\0",
-        b"steam-high-priority-session.service\0",
+        b"steam-priority-scheduler-session.service\0",
         b"-p\0",
         b"ActiveState\0",
         b"-p\0",
@@ -310,7 +310,7 @@ fn ready(home: &[u8], group: &[u8]) -> Result<Identity> {
     let deadline = now() + 90_000_000_000;
     loop {
         if !group_alive(group)? {
-            return Err("Steam stopped during startup. Check journalctl --user -u steam-high-priority-session.service.");
+            return Err("Steam stopped during startup. Check journalctl --user -u steam-priority-scheduler-session.service.");
         }
         if let Some(steam) = identity(home, group)? {
             if !steam.managed {
@@ -368,7 +368,7 @@ pub unsafe fn run(argc: usize, argv: *const *const u8, env: *const *const u8) ->
     {
         return Err("Invalid user runtime directory owner.");
     }
-    runtime.append(b"/steam-high-priority.lock")?;
+    runtime.append(b"/steam-priority-scheduler.lock")?;
     let lock = openat(AT_FDCWD, runtime.ptr(), 2 | 64 | NOFOLLOW, 0o600)
         .map_err(|_| "Cannot open the Steam launch lock.")?;
     let info = stat(lock.raw() as usize, b"\0".as_ptr(), 0x1000)
@@ -421,7 +421,7 @@ pub unsafe fn run(argc: usize, argv: *const *const u8, env: *const *const u8) ->
             b"/usr/bin/systemctl\0".as_slice(),
             b"--user\0",
             b"reset-failed\0",
-            b"steam-high-priority-session.service\0",
+            b"steam-priority-scheduler-session.service\0",
         ] {
             reset.push(arg.as_ptr())?;
         }
@@ -444,7 +444,7 @@ pub unsafe fn run(argc: usize, argv: *const *const u8, env: *const *const u8) ->
         b"--quiet\0",
         b"--collect\0",
         b"--expand-environment=no\0",
-        b"--unit=steam-high-priority-session.service\0",
+        b"--unit=steam-priority-scheduler-session.service\0",
         b"--service-type=exec\0",
         b"--property=Description=Managed Steam session\0",
         b"--property=Slice=app.slice\0",
@@ -490,7 +490,7 @@ pub unsafe fn run(argc: usize, argv: *const *const u8, env: *const *const u8) ->
     let mut steam_path = Buffer::<4096>::new();
     let n = read_file(
         AT_FDCWD,
-        b"/usr/local/libexec/steam-high-priority/steam-path\0".as_ptr(),
+        b"/usr/local/libexec/steam-priority-scheduler/steam-path\0".as_ptr(),
         &mut steam_path.bytes,
     )
     .map_err(|_| "Cannot read the installed Steam path. Run the installer again.")?;
@@ -520,7 +520,7 @@ pub unsafe fn run(argc: usize, argv: *const *const u8, env: *const *const u8) ->
         b"/usr/bin/systemctl\0".as_slice(),
         b"--user\0",
         b"restart\0",
-        b"steam-high-priority.service\0",
+        b"steam-priority-scheduler.service\0",
     ] {
         policy.push(arg.as_ptr())?;
     }
