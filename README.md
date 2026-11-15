@@ -26,12 +26,12 @@ In an 8-second test with 129 game threads in one application scope and 20 unrela
 
 ## Install
 
-Download the Linux x86-64 archive and `SHA256SUMS` from [GitHub Releases](https://github.com/errantmind/steam-priority-scheduler/releases). Save both files in the same directory. Release `v0.1.0` uses the original package name:
+Download the Linux x86-64 archive and `SHA256SUMS` from [GitHub Releases](https://github.com/errantmind/steam-priority-scheduler/releases). Save both files in the same directory. For `v0.1.1`:
 
 ```sh
 sha256sum --check SHA256SUMS
-tar -xzf steam-high-priority-v0.1.0-linux-x86_64.tar.gz
-cd steam-high-priority
+tar -xzf steam-priority-scheduler-v0.1.1-linux-x86_64.tar.gz
+cd steam-priority-scheduler
 ./install
 ```
 
@@ -72,6 +72,8 @@ Compilation uses the invoking user's Rust installation; a direct root invocation
 ```sh
 ./install
 ```
+
+Before upgrading from `v0.1.0`, close Steam and its games and run `./uninstall` from that version's extracted directory.
 
 Extract the new release into a clean directory, then run its `./install`. An unchanged installation keeps the same contents, ownership, permissions, link targets, and modification times.
 
