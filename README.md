@@ -152,30 +152,6 @@ journalctl --user -u steam-high-priority.service
 
 Steam starts when you launch it. After the client and all recognized game groups are empty, the poller becomes inactive.
 
-## Releases
-
-Use annotated version tags on reviewed `master` commits. Start with `v0.1.0`; use patch versions for fixes and minor versions for new functionality or changed behavior.
-
-```sh
-git tag -a v0.1.0 -m "steam-high-priority v0.1.0"
-git push origin v0.1.0
-```
-
-The release workflow builds with Rust **1.100.0**, verifies the static executable, and creates a draft release containing:
-
-- `steam-high-priority-v0.1.0-linux-x86_64.tar.gz`
-- `SHA256SUMS`
-
-Download the draft archive and check installation, identical reinstall, Steam operation, and repeated uninstall before publishing. Add a short change summary to the draft. Published tags and assets remain unchanged; corrections receive a new version.
-
-For a local package build with that compiler installed:
-
-```sh
-RUSTUP_TOOLCHAIN=1.100.0 ./scripts/package v0.1.0
-```
-
-Files are written under `build/release/`. Packaging includes the application, corresponding source/build recipe, installer, uninstaller, systemd units, README, and license.
-
 ## License
 
 GNU Affero General Public License version 3 (`AGPL-3.0-only`). See `LICENSE`.
