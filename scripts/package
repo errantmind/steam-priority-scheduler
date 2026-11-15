@@ -1,0 +1,51 @@
+#!/usr/bin/env bash
+# Internal release builder. Public install and uninstall remain argument-free.
+set -Eeuo pipefail
+export LC_ALL=C
+umask 022
+REPO=$(cd -- "$(dirname -- "$0")/.." && pwd -P)
+cd -- "$REPO"
+die() { printf 'steam-high-priority package: %s\n' "$*" >&2; exit 1; }
+(($# == 1)) || die 'Usage: scripts/package vMAJOR.MINOR.PATCH'
+version=$1
+[[ $version =~ ^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ ]] || die 'Use a version such as v0.1.0.'
+for command in git rustc readelf nm sha256sum cut stat tar gzip cp mktemp; do
+    command -v "$command" >/dev/null || die "Required build command is missing: $command"
+done
+source "$REPO/scripts/artifacts.sh"
+commit=$(git rev-parse --verify HEAD)
+epoch=$(git show -s --format=%ct "$commit")
+compiler=$(command -v rustc)
+compiler_version=$("$compiler" --version)
+output=$REPO/build/release
+mkdir -p "$output"
+work=$(mktemp -d "$REPO/build/.release.XXXXXXXX")
+trap 'rm -rf -- "$work"' EXIT
+project=$work/steam-high-priority
+mkdir -p "$project/bin"
+# Publish only the application, its source/build recipe, and installation files.
+files=(install uninstall README.md LICENSE src/*.rs scripts/build scripts/common.sh
+       scripts/artifacts.sh scripts/package systemd/steam-high-priority.service
+       systemd/user-manager.conf .github/workflows/release.yml)
+for file in "${files[@]}"; do
+    [[ -f $file && ! -L $file ]] || die "Missing or invalid package input: $file"
+done
+cp --parents -- "${files[@]}" "$project/"
+"$project/scripts/build" "$compiler" "$project/bin/steam-high-priority"
+chmod 755 "$project/bin/steam-high-priority"
+verify_binary "$project/bin/steam-high-priority"
+fingerprint=$(source_fingerprint "$project") || die 'Cannot fingerprint the runtime sources.'
+binary_hash=$(sha256sum "$project/bin/steam-high-priority" | cut -d ' ' -f1)
+{
+    printf 'format\t1\nversion\t%s\ncommit\t%s\ntarget\tx86_64-unknown-linux-gnu\n' "$version" "$commit"
+    printf 'compiler\t%s\nsource\t%s\nbinary\t%s\n' "$compiler_version" "$fingerprint" "$binary_hash"
+} > "$project/build-info"
+read_build_info "$project/build-info"
+archive=steam-high-priority-$version-linux-x86_64.tar.gz
+tar --sort=name --mtime="@$epoch" --owner=0 --group=0 --numeric-owner \
+    --mode=u+rwX,go+rX,go-w --format=gnu -C "$work" -cf - steam-high-priority \
+    | gzip -n > "$work/$archive"
+(cd -- "$work" && sha256sum "$archive") > "$work/SHA256SUMS"
+mv -f -- "$work/$archive" "$output/$archive"
+mv -f -- "$work/SHA256SUMS" "$output/SHA256SUMS"
+printf 'Release archive: %s\nChecksums: %s/SHA256SUMS\n' "$output/$archive" "$output"

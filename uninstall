@@ -12,13 +12,28 @@ fi
 
 # Do not terminate games or leave their existing -19 priorities hidden from the user.
 while IFS= read -r -d '' group; do
+    name=${group##*/}
+    [[ $name == steam-high-priority-session.service || $name =~ ^app-steam-app[0-9]+-[0-9]+\.scope$ ]] || continue
     if grep -qx 'populated 1' "$group/cgroup.events"; then
-        die 'Close all Steam sessions started by steam-high-priority, then run ./uninstall again.'
+        die 'Close Steam and its games, then run ./uninstall again.'
     fi
-done < <(find /sys/fs/cgroup -type d -name steam-high-priority-session.service -print0 2>/dev/null)
+done < <(find /sys/fs/cgroup -type d \( -name steam-high-priority-session.service -o -name 'app-steam-app*.scope' \) -print0 2>/dev/null)
 for path in "${FILES[@]}" "${LINKS[@]}"; do
     if exists "$path"; then
         old_matches "$path" || die "Installed file was modified: $path. Run ./install to repair it before removal."
+    fi
+done
+# Application scopes outlive the client unit. Stop the independent poller after
+# the population checks, before removing its executable and unit definition.
+manager_list
+for uid in "${MANAGERS[@]}"; do
+    [[ -S /run/user/$uid/bus ]] || continue
+    name=$(getent passwd "$uid" | cut -d: -f1)
+    [[ -n $name ]] || die "Cannot identify user manager $uid."
+    if runuser -u "$name" -- env XDG_RUNTIME_DIR="/run/user/$uid" DBUS_SESSION_BUS_ADDRESS="unix:path=/run/user/$uid/bus" \
+        /usr/bin/systemctl --user is-active --quiet steam-high-priority.service; then
+        runuser -u "$name" -- env XDG_RUNTIME_DIR="/run/user/$uid" DBUS_SESSION_BUS_ADDRESS="unix:path=/run/user/$uid/bus" \
+            /usr/bin/systemctl --user stop steam-high-priority.service
     fi
 done
 make_work

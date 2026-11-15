@@ -5,6 +5,8 @@ pub struct Entry<'a> {
     /// Checked child name, including its terminating NUL.
     pub name: &'a [u8],
     pub kind: u8,
+    /// Kernel continuation position; used only when a traversal shares its buffer.
+    pub cookie: i64,
 }
 
 /// Decode one Linux x86-64 getdents64 record without structure casts.
@@ -31,6 +33,7 @@ pub fn next<'a>(data: &'a [u8], cursor: &mut usize) -> Result<Entry<'a>> {
             return Ok(Entry {
                 name: &record[19..20 + index],
                 kind: header[18],
+                cookie: i64::from_ne_bytes(header[8..16].try_into().map_err(|_| invalid)?),
             });
         }
     }

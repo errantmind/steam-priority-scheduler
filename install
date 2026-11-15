@@ -3,6 +3,7 @@ set -Eeuo pipefail
 ENTRY=$(readlink -f -- "$0")
 REPO=$(dirname -- "$ENTRY")
 source "$REPO/scripts/common.sh"
+source "$REPO/scripts/artifacts.sh"
 require_root "$@"
 
 [[ $(uname -s) == Linux && $(uname -m) == x86_64 ]] || die 'Linux x86-64 is required.'
@@ -34,9 +35,16 @@ if [[ $builder != root ]]; then
     done
 fi
 
-fingerprint=$({ printf 'steam-high-priority build format 1\n'; for f in src/main.rs src/sys.rs src/dirent.rs src/poll.rs src/launch.rs scripts/build; do sha256sum "$REPO/$f" | cut -d ' ' -f1; done; } | sha256sum | cut -d ' ' -f1)
+fingerprint=$(source_fingerprint "$REPO") || die 'Cannot fingerprint the runtime sources.'
 make_work
-if [[ $OLD_SOURCE == "$fingerprint" ]] && old_matches "$PREFIX/steam-high-priority"; then
+if exists "$REPO/build-info" || exists "$REPO/bin/steam-high-priority"; then
+    read_build_info "$REPO/build-info"
+    [[ $RELEASE_SOURCE == "$fingerprint" ]] || die 'Release sources do not match build-info. Extract a fresh release archive.'
+    [[ -f $REPO/bin/steam-high-priority && ! -L $REPO/bin/steam-high-priority ]] || die 'The release binary is missing or invalid.'
+    cp -- "$REPO/bin/steam-high-priority" "$WORK/desired/binary"
+    [[ $(hash "$WORK/desired/binary") == "$RELEASE_BINARY" ]] || die 'Release binary checksum mismatch. Extract a fresh release archive.'
+    compiler_version=$RELEASE_COMPILER
+elif [[ $OLD_SOURCE == "$fingerprint" ]] && old_matches "$PREFIX/steam-high-priority"; then
     cp -- "$PREFIX/steam-high-priority" "$WORK/desired/binary"
     compiler_version=$OLD_COMPILER
 else
@@ -59,10 +67,7 @@ else
     [[ -f $BUILD_DIR/binary && ! -L $BUILD_DIR/binary ]] || die 'The build did not produce a regular executable.'
     cp -- "$BUILD_DIR/binary" "$WORK/desired/binary"
 fi
-readelf -h "$WORK/desired/binary" | grep -q 'Advanced Micro Devices X86-64' || die 'Unexpected executable architecture.'
-if readelf -l "$WORK/desired/binary" | grep -q INTERP || readelf -d "$WORK/desired/binary" | grep -q NEEDED; then die 'The runtime must be static.'; fi
-[[ -z $(nm -u "$WORK/desired/binary") ]] || die 'The runtime contains unresolved symbols.'
-if nm "$WORK/desired/binary" | grep -Eq '__rust_alloc|__rg_alloc| malloc$| calloc$| realloc$'; then die 'The runtime contains an allocator.'; fi
+verify_binary "$WORK/desired/binary"
 
 printf '%s\n' "$STEAM" > "$WORK/desired/steam-path"
 cp -- "$REPO/systemd/steam-high-priority.service" "$WORK/desired/unit"

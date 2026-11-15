@@ -1,12 +1,11 @@
 [Unit]
-Description=Steam high-priority thread policy
-BindsTo=steam-high-priority-session.service
+Description=Steam game thread priority policy
 After=steam-high-priority-session.service
 
 [Service]
 Type=exec
 Slice=app.slice
 ExecStart=/usr/local/libexec/steam-high-priority/steam-priority
-Nice=0
+Nice=10
 LimitNICE=-19
 Restart=no

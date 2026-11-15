@@ -447,10 +447,9 @@ pub unsafe fn run(argc: usize, argv: *const *const u8, env: *const *const u8) ->
         b"--unit=steam-high-priority-session.service\0",
         b"--service-type=exec\0",
         b"--property=Description=Managed Steam session\0",
-        b"--property=Wants=steam-high-priority.service\0",
         b"--property=Slice=app.slice\0",
         b"--property=ExitType=cgroup\0",
-        b"--property=Nice=-19\0",
+        b"--property=Nice=0\0",
         b"--property=LimitNICE=-19\0",
         b"--property=Restart=no\0",
         b"--property=KillMode=control-group\0",
@@ -513,6 +512,22 @@ pub unsafe fn run(argc: usize, argv: *const *const u8, env: *const *const u8) ->
     let rc = command(&args, env, None)?;
     if rc != 0 {
         return Err("The managed Steam service could not start.");
+    }
+    // A new session can overlap the previous poller's empty-group exit.
+    // Restart exactly once here; requests forwarded to a live session do not restart it.
+    let mut policy = Args::new();
+    for arg in [
+        b"/usr/bin/systemctl\0".as_slice(),
+        b"--user\0",
+        b"restart\0",
+        b"steam-high-priority.service\0",
+    ] {
+        policy.push(arg.as_ptr())?;
+    }
+    if command(&policy, env, None)? != 0 {
+        return Err(
+            "Steam started, but its priority service could not start. Check the user journal.",
+        );
     }
     status = state(env)?;
     ready(home, status.group.data())?;

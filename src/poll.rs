@@ -1,6 +1,6 @@
 #![forbid(unsafe_code)]
 
-use crate::{dirent, sys::*};
+use crate::{dirent, game, sys::*};
 const DEPTH: usize = 32;
 #[derive(Clone, Copy)]
 struct Level {
@@ -58,6 +58,9 @@ impl Cache {
     }
     fn populated(&self) -> Result<bool> {
         rewind(self.events.raw()).map_err(|_| "Cannot rewind Steam's cached state file.")?;
+        self.read_population()
+    }
+    fn read_population(&self) -> Result<bool> {
         let mut input = [0u8; 512];
         let n = read_fd(self.events.raw(), &mut input)
             .map_err(|_| "Cannot read Steam's cached state file.")?;
@@ -186,16 +189,43 @@ fn correct(tid: Tid, root: &[u8], scratch: &mut [u8; 16384]) -> Result<()> {
         Err("Cannot set a Steam thread to -19. Check LimitNICE.")
     }
 }
+fn correct_id(
+    tid: Tid,
+    root: &[u8],
+    fallback: bool,
+    task_data: &mut [u8],
+    scratch: &mut [u8; 16384],
+    issue: &mut Option<&'static str>,
+) {
+    let result = if fallback {
+        game::threads(tid, task_data, scratch, |tid, scratch| {
+            if let Err(message) = correct(tid, root, scratch) {
+                issue.get_or_insert(message);
+            }
+        })
+    } else {
+        correct(tid, root, scratch)
+    };
+    if let Err(message) = result {
+        issue.get_or_insert(message);
+    }
+}
 fn correct_file(
     directory: i32,
     root: &[u8],
     input: &mut [u8; 8192],
     scratch: &mut [u8; 16384],
     issue: &mut Option<&'static str>,
+    fallback: bool,
+    task_data: &mut [u8],
 ) -> Result<()> {
     let fd = match openat(
         directory as usize,
-        b"cgroup.threads\0".as_ptr(),
+        if fallback {
+            b"cgroup.procs\0".as_ptr()
+        } else {
+            b"cgroup.threads\0".as_ptr()
+        },
         RDONLY | NOFOLLOW,
         0,
     ) {
@@ -225,9 +255,7 @@ fn correct_file(
                 digits = true;
             } else if b.is_ascii_whitespace() {
                 if let Some(tid) = Tid::new(value as u32) {
-                    if let Err(message) = correct(tid, root, scratch) {
-                        issue.get_or_insert(message);
-                    }
+                    correct_id(tid, root, fallback, task_data, scratch, issue);
                 }
                 digits = false;
                 value = 0;
@@ -238,9 +266,7 @@ fn correct_file(
     }
     if digits {
         if let Some(tid) = Tid::new(value as u32) {
-            if let Err(message) = correct(tid, root, scratch) {
-                issue.get_or_insert(message);
-            }
+            correct_id(tid, root, fallback, task_data, scratch, issue);
         }
     }
     Ok(())
@@ -249,6 +275,7 @@ fn scan(
     directory: i32,
     root: &[u8],
     levels: &mut [Level; DEPTH],
+    fallback: bool,
     input: &mut [u8; 8192],
     scratch: &mut [u8; 16384],
     issue: &mut Option<&'static str>,
@@ -259,7 +286,15 @@ fn scan(
     levels[0].end = 0;
     let result = (|| {
         let mut depth = 0;
-        correct_file(levels[0].fd, root, input, scratch, issue)?;
+        correct_file(
+            levels[0].fd,
+            root,
+            input,
+            scratch,
+            issue,
+            fallback,
+            &mut levels[0].data,
+        )?;
         loop {
             let level = &mut levels[depth];
             if level.pos == level.end {
@@ -301,7 +336,15 @@ fn scan(
             levels[depth].fd = child.into_raw();
             levels[depth].pos = 0;
             levels[depth].end = 0;
-            correct_file(levels[depth].fd, root, input, scratch, issue)?;
+            correct_file(
+                levels[depth].fd,
+                root,
+                input,
+                scratch,
+                issue,
+                fallback,
+                &mut levels[depth].data,
+            )?;
         }
         Ok(())
     })();
@@ -311,6 +354,86 @@ fn scan(
         level.fd = -1;
     }
     result
+}
+// Discovery lends its buffer to each game scan. Resume at the kernel's cookie;
+// no scope list or extra directory buffer is retained.
+fn application_scopes(
+    parent: i32,
+    group: &mut Buffer<4096>,
+    levels: &mut [Level; DEPTH],
+    input: &mut [u8; 8192],
+    scratch: &mut [u8; 16384],
+    issue: &mut Option<&'static str>,
+) -> Result<bool> {
+    let parent_len = group.len;
+    let mut alive = false;
+    loop {
+        let n = directory_entries(parent, &mut levels[0].data)
+            .map_err(|_| "Cannot enumerate Steam application scopes.")?;
+        if n == 0 {
+            return Ok(alive);
+        }
+        let mut pos = 0;
+        while pos < n {
+            let entry = dirent::next(&levels[0].data[..n], &mut pos)?;
+            let name = &entry.name[..entry.name.len() - 1];
+            if !matches!(entry.kind, 0 | 4) || !game::scope_name(name) {
+                continue;
+            }
+            let cookie = entry.cookie;
+            let directory = match openat(
+                parent as usize,
+                entry.name.as_ptr(),
+                RDONLY | DIRECTORY | NOFOLLOW,
+                0,
+            ) {
+                Ok(fd) => fd,
+                Err(-2) | Err(-20) | Err(-40) => continue,
+                Err(_) => {
+                    issue.get_or_insert("Cannot open a Steam application scope.");
+                    alive = true;
+                    continue;
+                }
+            };
+            let appended = group.append(b"/").and_then(|_| group.append(name));
+            let result = (|| {
+                appended?;
+                let events = openat(
+                    directory.raw() as usize,
+                    b"cgroup.events\0".as_ptr(),
+                    RDONLY | NOFOLLOW,
+                    0,
+                )
+                .map_err(|_| "Cannot read an application scope state.")?;
+                let scope = Cache { directory, events };
+                // The scope state file was just opened, so its offset is already zero.
+                if !scope.read_population()? {
+                    return Ok(false);
+                }
+                scan(
+                    scope.directory.raw(),
+                    group.data(),
+                    levels,
+                    false,
+                    input,
+                    scratch,
+                    issue,
+                )?;
+                Ok(true)
+            })();
+            group.truncate(parent_len);
+            match result {
+                Ok(populated) => alive |= populated,
+                Err(message) => {
+                    issue.get_or_insert(message);
+                    alive = true;
+                }
+            }
+            seek_directory(parent, cookie)
+                .map_err(|_| "Cannot resume application scope discovery.")?;
+            break;
+        }
+    }
 }
 pub fn run() -> Result<i32> {
     let mut scratch = [0u8; 16384];
@@ -327,10 +450,11 @@ pub fn run() -> Result<i32> {
     }
     let mut group = Buffer::<4096>::new();
     group.append(&own[..own.len() - suffix.len()])?;
-    group.append(b"/steam-high-priority-session.service")?;
+    let parent_len = group.len;
     let mut path = Buffer::<4096>::new();
     path.append(b"/sys/fs/cgroup")?;
     path.append(group.data())?;
+    let parent_path_len = path.len;
     // Fixed storage is initialized before the first pass and reused thereafter.
     let mut levels = [Level::ZERO; DEPTH];
     // Set every descriptor to the unused value before scanning or cleanup.
@@ -342,21 +466,67 @@ pub fn run() -> Result<i32> {
     let mut deadline = now();
     let mut cache = Cache::new();
     let mut notice = Notice { failed: false };
+    let mut parent = Fd::invalid();
     loop {
         let mut issue = None;
-        match cache.pass(path.ptr(), |directory| {
+        group.truncate(parent_len);
+        path.truncate(parent_path_len);
+        group.append(b"/steam-high-priority-session.service")?;
+        path.append(b"/steam-high-priority-session.service")?;
+        let client_alive = match cache.pass(path.ptr(), |directory| {
             scan(
                 directory,
                 group.data(),
                 &mut levels,
+                true,
                 &mut input,
                 &mut scratch,
                 &mut issue,
             )
         }) {
-            Ok(false) => break,
-            Ok(true) => notice.update(issue),
-            Err(message) => notice.update(Some(message)),
+            Ok(alive) => alive,
+            Err(message) => {
+                issue.get_or_insert(message);
+                true
+            }
+        };
+        group.truncate(parent_len);
+        path.truncate(parent_path_len);
+        let mut applications_alive = false;
+        for attempt in 0..2 {
+            let result = (|| {
+                if parent.raw() < 0 {
+                    parent = openat(AT_FDCWD, path.ptr(), RDONLY | DIRECTORY | NOFOLLOW, 0)
+                        .map_err(|_| "Cannot open the application slice.")?;
+                }
+                rewind(parent.raw()).map_err(|_| "Cannot rewind the application slice.")?;
+                application_scopes(
+                    parent.raw(),
+                    &mut group,
+                    &mut levels,
+                    &mut input,
+                    &mut scratch,
+                    &mut issue,
+                )
+            })();
+            match result {
+                Ok(alive) => {
+                    applications_alive = alive;
+                    break;
+                }
+                Err(message) => {
+                    parent = Fd::invalid();
+                    group.truncate(parent_len);
+                    if attempt == 1 {
+                        issue.get_or_insert(message);
+                        applications_alive = true;
+                    }
+                }
+            }
+        }
+        notice.update(issue);
+        if !client_alive && !applications_alive && issue.is_none() {
+            break;
         }
         let current = now();
         loop {

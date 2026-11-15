@@ -7,6 +7,7 @@
 )))]
 compile_error!("steam-high-priority requires Linux x86-64.");
 mod dirent;
+mod game;
 mod launch;
 mod poll;
 mod sys;

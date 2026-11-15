@@ -158,11 +158,52 @@ pub fn directory_entries(fd: i32, buffer: &mut [u8]) -> core::result::Result<usi
 }
 
 pub fn rewind(fd: i32) -> core::result::Result<(), isize> {
+    seek_directory(fd, 0)
+}
+/// Resume getdents64 at a kernel-provided directory cookie (SEEK_SET).
+pub fn seek_directory(fd: i32, cookie: i64) -> core::result::Result<(), isize> {
+    if cookie < 0 {
+        return Err(-22);
+    }
     loop {
-        let n = unsafe { call(8, fd as usize, 0, 0, 0, 0, 0) };
+        // SAFETY: lseek takes scalar arguments and retains no user memory.
+        let n = unsafe { call(8, fd as usize, cookie as usize, 0, 0, 0, 0) };
         if n != -4 {
             return if n < 0 { Err(n) } else { Ok(()) };
         }
+    }
+}
+pub fn read_link(
+    directory: i32,
+    name: &[u8],
+    buffer: &mut [u8],
+) -> core::result::Result<usize, isize> {
+    if name.last() != Some(&0) {
+        return Err(-22);
+    }
+    loop {
+        // SAFETY: name is terminated and buffer is exclusively borrowed for this call.
+        let n = unsafe {
+            call(
+                267,
+                directory as usize,
+                name.as_ptr() as usize,
+                buffer.as_mut_ptr() as usize,
+                buffer.len(),
+                0,
+                0,
+            )
+        };
+        if n == -4 {
+            continue;
+        }
+        return if n < 0 {
+            Err(n)
+        } else if n as usize >= buffer.len() {
+            Err(-75)
+        } else {
+            Ok(n as usize)
+        };
     }
 }
 pub fn read(fd: i32, buffer: &mut [u8]) -> isize {
@@ -232,6 +273,11 @@ impl<const N: usize> Buffer<N> {
     }
     pub fn number(&mut self, value: u64) -> Result<()> {
         write!(self, "{}", value).map_err(|_| "Numeric buffer overflow.")
+    }
+    pub fn truncate(&mut self, len: usize) {
+        assert!(len <= self.len);
+        self.len = len;
+        self.bytes[len] = 0;
     }
     pub fn data(&self) -> &[u8] {
         &self.bytes[..self.len]
