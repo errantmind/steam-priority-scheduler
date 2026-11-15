@@ -73,8 +73,6 @@ Compilation uses the invoking user's Rust installation; a direct root invocation
 ./install
 ```
 
-Before upgrading from `v0.1.0`, close Steam and its games and run `./uninstall` from that version's extracted directory.
-
 Extract the new release into a clean directory, then run its `./install`. An unchanged installation keeps the same contents, ownership, permissions, link targets, and modification times.
 
 Release installation uses the exact bundled binary. Source installation reuses a verified binary with the same source fingerprint, or compiles changed source. Reinstall repairs missing or damaged project-owned files. Executables are replaced atomically. Close Steam and its games before activating an update; a fresh session establishes the new priority policy.

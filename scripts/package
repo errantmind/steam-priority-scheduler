@@ -8,7 +8,7 @@ cd -- "$REPO"
 die() { printf 'steam-priority-scheduler package: %s\n' "$*" >&2; exit 1; }
 (($# == 1)) || die 'Usage: scripts/package vMAJOR.MINOR.PATCH'
 version=$1
-[[ $version =~ ^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ ]] || die 'Use a version such as v0.1.0.'
+[[ $version =~ ^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ ]] || die 'Use the version format vMAJOR.MINOR.PATCH.'
 for command in git rustc readelf nm sha256sum cut stat tar gzip cp mktemp; do
     command -v "$command" >/dev/null || die "Required build command is missing: $command"
 done
