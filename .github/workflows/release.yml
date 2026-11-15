@@ -32,6 +32,9 @@ jobs:
         shell: bash
         run: |
           [[ "$RELEASE_TAG" =~ ^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ ]]
+          # Checkout can replace its local annotated tag with the event's commit.
+          # Restore the remote tag object, then verify it against the checked-out commit.
+          git fetch --no-tags origin "+refs/tags/$RELEASE_TAG:refs/tags/$RELEASE_TAG"
           test "$(git cat-file -t "$RELEASE_TAG")" = tag
           test "$(git rev-parse "$RELEASE_TAG^{commit}")" = "$(git rev-parse HEAD)"
           test -z "$(git status --porcelain)"
