@@ -34,7 +34,7 @@ if [[ $builder != root ]]; then
     done
 fi
 
-fingerprint=$({ printf 'steam-high-priority build format 1\n'; for f in src/main.rs src/sys.rs src/poll.rs src/launch.rs scripts/build; do sha256sum "$REPO/$f" | cut -d ' ' -f1; done; } | sha256sum | cut -d ' ' -f1)
+fingerprint=$({ printf 'steam-high-priority build format 1\n'; for f in src/main.rs src/sys.rs src/dirent.rs src/poll.rs src/launch.rs scripts/build; do sha256sum "$REPO/$f" | cut -d ' ' -f1; done; } | sha256sum | cut -d ' ' -f1)
 make_work
 if [[ $OLD_SOURCE == "$fingerprint" ]] && old_matches "$PREFIX/steam-high-priority"; then
     cp -- "$PREFIX/steam-high-priority" "$WORK/desired/binary"

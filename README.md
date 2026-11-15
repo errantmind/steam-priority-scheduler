@@ -4,9 +4,18 @@ Run Steam and everything it launches at nice **−19**. A small Rust poller chec
 
 The policy covers Steam, web helpers, downloads, Proton, Wine, games, and their worker threads. It uses one static executable with fixed-size memory and native Linux syscalls.
 
+## Performance design
+
+- **Static `no_std` Rust executable** with direct Linux syscalls and no libc or shared-library dependencies.
+- **Zero heap allocations**, using fixed-size buffers initialized before polling.
+- **Targeted cgroup scans** covering Steam and its descendants without scanning unrelated processes.
+- **One priority query per thread**, with ownership and membership checks only when correction is needed.
+- **Cached file descriptors** reduce repeated opens, with bounded recovery after failures.
+- **One poller per Steam session**, sleeping between two-second checks and exiting when the session ends.
+
 ## Measured overhead
 
-Across four 16-second runs with a 129-thread test workload on an Intel Core i7-7700K, the poller used **204 KiB of resident memory** and averaged **0.0045% of one logical CPU**.
+Across two 8-second runs with a 129-thread test workload on an Intel Core i7-7700K, the poller used **204 KiB of resident memory** and averaged **0.0049% of one logical CPU**.
 
 ## Requirements
 
@@ -94,7 +103,9 @@ The root directory and `cgroup.events` descriptors are reused between passes. A 
 
 The launcher serializes simultaneous requests and forwards subsequent arguments through Steam's command interface. Arguments remain separate, and the selected display, locale, PATH, and XDG environment values are preserved.
 
-The executable is approximately 42 KiB. Its storage limits are 32 nested cgroup levels, 4096-byte path buffers, and 255 launch arguments including systemd options. Buffer overflow returns an error. The launcher uses the installed systemd and Steam forwarding commands.
+The executable is approximately 42 KiB. It uses `no_std`, fixed buffers, and direct Linux syscalls. The poller and directory parser forbid unsafe code. The poller's native calls use syscall wrappers. Descriptor ownership is explicit, and Linux structure layouts are checked at compile time.
+
+Storage limits are 32 nested cgroup levels, 4096-byte path buffers, and 255 launch arguments including systemd options. Buffer overflow returns an error. The launcher uses the installed systemd and Steam forwarding commands. If captured helper output exceeds its buffer or cannot be read, the launcher terminates and reaps that helper.
 
 CPU affinity, scheduling classes, and cgroup CPU weights stay unchanged.
 

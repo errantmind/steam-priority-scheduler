@@ -1,5 +1,12 @@
 #![no_std]
 #![no_main]
+#[cfg(not(all(
+    target_os = "linux",
+    target_arch = "x86_64",
+    target_pointer_width = "64"
+)))]
+compile_error!("steam-high-priority requires Linux x86-64.");
+mod dirent;
 mod launch;
 mod poll;
 mod sys;

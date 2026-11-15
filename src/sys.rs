@@ -63,7 +63,29 @@ pub fn error(message: &str) {
     put(2, b"\n");
 }
 
-pub struct Fd(pub i32);
+#[repr(transparent)]
+pub struct Fd(i32);
+impl Fd {
+    pub const fn invalid() -> Self {
+        Self(-1)
+    }
+    /// Take ownership of a newly returned descriptor, or the unused value -1.
+    ///
+    /// # Safety
+    /// A live descriptor must have no other owner responsible for closing it.
+    pub unsafe fn from_raw(fd: i32) -> Self {
+        Self(fd)
+    }
+    pub fn raw(&self) -> i32 {
+        self.0
+    }
+    /// Transfer ownership to the caller, which must close the descriptor once.
+    pub fn into_raw(self) -> i32 {
+        let fd = self.0;
+        core::mem::forget(self);
+        fd
+    }
+}
 impl Drop for Fd {
     fn drop(&mut self) {
         close(self.0);
@@ -83,6 +105,58 @@ pub fn openat(
         return if n < 0 { Err(n) } else { Ok(Fd(n as i32)) };
     }
 }
+/// Linux TID accepted by priority syscalls; zero would select the caller.
+#[repr(transparent)]
+#[derive(Clone, Copy)]
+pub struct Tid(u32);
+impl Tid {
+    pub fn new(value: u32) -> Option<Self> {
+        (value > 0 && value <= i32::MAX as u32).then_some(Self(value))
+    }
+    pub fn get(self) -> u32 {
+        self.0
+    }
+}
+
+/// Raw Linux priority is 20 - nice: nice -19 is 39. Errors are negative errno.
+pub fn get_priority(tid: Tid) -> isize {
+    // SAFETY: getpriority takes scalar arguments and writes no user memory.
+    unsafe { call(140, 0, tid.get() as usize, 0, 0, 0, 0) }
+}
+pub fn set_high_priority(tid: Tid) -> isize {
+    // SAFETY: setpriority takes scalar arguments and writes no user memory.
+    unsafe { call(141, 0, tid.get() as usize, (-19isize) as usize, 0, 0, 0) }
+}
+
+/// Fill a borrowed buffer with Linux directory records. Retry interrupted reads.
+pub fn directory_entries(fd: i32, buffer: &mut [u8]) -> core::result::Result<usize, isize> {
+    loop {
+        // SAFETY: the kernel receives an exclusive writable slice for this call.
+        // It does not retain the pointer and can write at most buffer.len() bytes.
+        let n = unsafe {
+            call(
+                217,
+                fd as usize,
+                buffer.as_mut_ptr() as usize,
+                buffer.len(),
+                0,
+                0,
+                0,
+            )
+        };
+        if n == -4 {
+            continue;
+        }
+        return if n < 0 {
+            Err(n)
+        } else if n as usize > buffer.len() {
+            Err(-75)
+        } else {
+            Ok(n as usize)
+        };
+    }
+}
+
 pub fn rewind(fd: i32) -> core::result::Result<(), isize> {
     loop {
         let n = unsafe { call(8, fd as usize, 0, 0, 0, 0, 0) };
@@ -222,6 +296,25 @@ pub struct Timespec {
     pub sec: i64,
     pub nsec: i64,
 }
+// Linux x86-64 UAPI layouts. Check all fields read by this program.
+const _: () = {
+    use core::mem::{align_of, offset_of, size_of};
+    assert!(size_of::<Fd>() == 4);
+    assert!(align_of::<Fd>() == 4);
+    assert!(size_of::<Tid>() == 4);
+    assert!(size_of::<Statx>() == 256);
+    assert!(align_of::<Statx>() == 8);
+    assert!(offset_of!(Statx, uid) == 20);
+    assert!(offset_of!(Statx, mode) == 28);
+    assert!(offset_of!(Statx, ino) == 32);
+    assert!(offset_of!(Statx, devmajor) == 136);
+    assert!(offset_of!(Statx, devminor) == 140);
+    assert!(size_of::<Timespec>() == 16);
+    assert!(align_of::<Timespec>() == 8);
+    assert!(offset_of!(Timespec, sec) == 0);
+    assert!(offset_of!(Timespec, nsec) == 8);
+};
+
 pub fn now() -> u64 {
     let mut t = Timespec { sec: 0, nsec: 0 };
     if unsafe { call(228, 1, &mut t as *mut _ as usize, 0, 0, 0, 0) } != 0 {

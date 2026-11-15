@@ -1,4 +1,4 @@
-use crate::sys::*;
+use crate::{dirent, sys::*};
 use core::ptr;
 const MAX_ARGS: usize = 256;
 struct Args {
@@ -31,19 +31,20 @@ unsafe fn command(
     if output.is_some() && call(293, pipe.as_mut_ptr() as usize, CLOEXEC, 0, 0, 0, 0) < 0 {
         return Err("Cannot open a command pipe.");
     }
-    let read_end = Fd(pipe[0]);
-    let write_end = Fd(pipe[1]);
+    // pipe2 returned two descriptors owned by this command invocation.
+    let read_end = Fd::from_raw(pipe[0]);
+    let write_end = Fd::from_raw(pipe[1]);
     let child = call(57, 0, 0, 0, 0, 0, 0);
     if child < 0 {
         return Err("Cannot start a systemd command.");
     }
     if child == 0 {
-        if write_end.0 >= 0 {
-            close(read_end.0);
-            if call(33, write_end.0 as usize, 1, 0, 0, 0, 0) < 0 {
+        if write_end.raw() >= 0 {
+            close(read_end.raw());
+            if call(33, write_end.raw() as usize, 1, 0, 0, 0, 0) < 0 {
                 exit(126);
             }
-            close(write_end.0);
+            close(write_end.raw());
         }
         call(
             59,
@@ -58,24 +59,30 @@ unsafe fn command(
         exit(127);
     }
     drop(write_end);
-    let mut overflow = false;
+    let mut failure = None;
     if let Some(out) = output.as_mut() {
         out.clear();
         let mut chunk = [0u8; 2048];
         loop {
-            let n = read(read_end.0, &mut chunk);
+            let n = read(read_end.raw(), &mut chunk);
             if n < 0 {
-                overflow = true;
+                failure = Some("Cannot read command output.");
                 break;
             }
             if n == 0 {
                 break;
             }
-            if !overflow && out.append(&chunk[..n as usize]).is_err() {
-                overflow = true;
+            if out.append(&chunk[..n as usize]).is_err() {
+                failure = Some("Command output exceeds the fixed buffer.");
+                break;
             }
         }
     }
+    if failure.is_some() {
+        // The unreaped child PID cannot be reused. Stop the writer before waiting.
+        while call(62, child as usize, 9, 0, 0, 0, 0) == -4 {}
+    }
+    drop(read_end);
     let mut status = 0i32;
     loop {
         let rc = call(
@@ -95,8 +102,8 @@ unsafe fn command(
         }
         break;
     }
-    if overflow {
-        return Err("Command output exceeds the fixed buffer.");
+    if let Some(message) = failure {
+        return Err(message);
     }
     Ok(if status & 0x7f == 0 {
         (status >> 8) & 255
@@ -184,14 +191,14 @@ fn identity(home: &[u8], group: &[u8]) -> Result<Option<Identity>> {
         Err(-2) => return Ok(None),
         Err(_) => return Err("Cannot inspect Steam's process."),
     };
-    if stat(directory.0 as usize, b"\0".as_ptr(), 0x1000)
+    if stat(directory.raw() as usize, b"\0".as_ptr(), 0x1000)
         .map_err(|_| "Cannot inspect Steam's owner.")?
         .uid
         != uid()
     {
         return Ok(None);
     }
-    let n = match read_file(directory.0 as usize, b"comm\0".as_ptr(), &mut data) {
+    let n = match read_file(directory.raw() as usize, b"comm\0".as_ptr(), &mut data) {
         Ok(n) => n,
         Err(_) => return Ok(None),
     };
@@ -201,7 +208,7 @@ fn identity(home: &[u8], group: &[u8]) -> Result<Option<Identity>> {
     let n = unsafe {
         call(
             267,
-            directory.0 as usize,
+            directory.raw() as usize,
             b"exe\0".as_ptr() as usize,
             data.as_mut_ptr() as usize,
             data.len(),
@@ -212,7 +219,7 @@ fn identity(home: &[u8], group: &[u8]) -> Result<Option<Identity>> {
     if n <= 0 || !data[..n as usize].ends_with(b"/steam") {
         return Ok(None);
     }
-    let n = match read_file(directory.0 as usize, b"stat\0".as_ptr(), &mut data) {
+    let n = match read_file(directory.raw() as usize, b"stat\0".as_ptr(), &mut data) {
         Ok(n) => n,
         Err(_) => return Ok(None),
     };
@@ -230,7 +237,7 @@ fn identity(home: &[u8], group: &[u8]) -> Result<Option<Identity>> {
         .nth(18)
         .and_then(decimal)
         .ok_or("Invalid Steam process start time.")?;
-    let n = match read_file(directory.0 as usize, b"cgroup\0".as_ptr(), &mut data) {
+    let n = match read_file(directory.raw() as usize, b"cgroup\0".as_ptr(), &mut data) {
         Ok(n) => n,
         Err(_) => return Ok(None),
     };
@@ -264,44 +271,20 @@ fn endpoint(home: &[u8], steam: &Identity) -> Result<bool> {
     };
     let mut data = [0u8; 4096];
     loop {
-        let n = unsafe {
-            call(
-                217,
-                dir.0 as usize,
-                data.as_mut_ptr() as usize,
-                data.len(),
-                0,
-                0,
-                0,
-            )
+        let n = match directory_entries(dir.raw(), &mut data) {
+            Ok(0) | Err(_) => return Ok(false),
+            Ok(n) => n,
         };
-        if n == -4 {
-            continue;
-        }
-        if n <= 0 {
-            return Ok(false);
-        }
         let mut offset = 0;
-        while offset < n as usize {
-            if offset + 19 >= n as usize {
-                return Err("Invalid Steam descriptor entry.");
-            }
-            let length = u16::from_ne_bytes([data[offset + 16], data[offset + 17]]) as usize;
-            if length < 20 || offset + length > n as usize {
-                return Err("Invalid Steam descriptor entry.");
-            }
-            let name = &data[offset + 19..offset + length];
-            if name.iter().position(|b| *b == 0).is_none() {
-                return Err("Invalid Steam descriptor name.");
-            }
-            if name[0] != b'.' {
-                if let Ok(info) = stat(dir.0 as usize, name.as_ptr(), 0) {
+        while offset < n {
+            let entry = dirent::next(&data[..n], &mut offset)?;
+            if !matches!(entry.name, b".\0" | b"..\0") {
+                if let Ok(info) = stat(dir.raw() as usize, entry.name.as_ptr(), 0) {
                     if same(&pipe, &info) {
                         return Ok(true);
                     }
                 }
             }
-            offset += length;
         }
     }
 }
@@ -388,13 +371,13 @@ pub unsafe fn run(argc: usize, argv: *const *const u8, env: *const *const u8) ->
     runtime.append(b"/steam-high-priority.lock")?;
     let lock = openat(AT_FDCWD, runtime.ptr(), 2 | 64 | NOFOLLOW, 0o600)
         .map_err(|_| "Cannot open the Steam launch lock.")?;
-    let info = stat(lock.0 as usize, b"\0".as_ptr(), 0x1000)
+    let info = stat(lock.raw() as usize, b"\0".as_ptr(), 0x1000)
         .map_err(|_| "Cannot inspect the Steam launch lock.")?;
     if info.uid != uid() || info.mode & 0xf000 != 0x8000 {
         return Err("Invalid Steam launch lock.");
     }
     loop {
-        let rc = call(73, lock.0 as usize, 2, 0, 0, 0, 0);
+        let rc = call(73, lock.raw() as usize, 2, 0, 0, 0, 0);
         if rc == -4 {
             continue;
         }

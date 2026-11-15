@@ -1,4 +1,6 @@
-use crate::sys::*;
+#![forbid(unsafe_code)]
+
+use crate::{dirent, sys::*};
 const DEPTH: usize = 32;
 #[derive(Clone, Copy)]
 struct Level {
@@ -7,6 +9,7 @@ struct Level {
     end: usize,
     data: [u8; 4096],
 }
+const _: () = assert!(core::mem::size_of::<Level>() == 4120);
 impl Level {
     const ZERO: Self = Self {
         fd: 0,
@@ -24,16 +27,16 @@ struct Cache {
 impl Cache {
     fn new() -> Self {
         Self {
-            directory: Fd(-1),
-            events: Fd(-1),
+            directory: Fd::invalid(),
+            events: Fd::invalid(),
         }
     }
     fn clear(&mut self) {
-        self.events = Fd(-1);
-        self.directory = Fd(-1);
+        self.events = Fd::invalid();
+        self.directory = Fd::invalid();
     }
     fn open(&mut self, path: *const u8) -> Result<bool> {
-        if self.directory.0 >= 0 && self.events.0 >= 0 {
+        if self.directory.raw() >= 0 && self.events.raw() >= 0 {
             return Ok(true);
         }
         self.clear();
@@ -43,7 +46,7 @@ impl Cache {
             Err(_) => return Err("Cannot open Steam's cgroup; retrying on the next pass."),
         };
         let events = openat(
-            directory.0 as usize,
+            directory.raw() as usize,
             b"cgroup.events\0".as_ptr(),
             RDONLY | NOFOLLOW,
             0,
@@ -54,9 +57,9 @@ impl Cache {
         Ok(true)
     }
     fn populated(&self) -> Result<bool> {
-        rewind(self.events.0).map_err(|_| "Cannot rewind Steam's cached state file.")?;
+        rewind(self.events.raw()).map_err(|_| "Cannot rewind Steam's cached state file.")?;
         let mut input = [0u8; 512];
-        let n = read_fd(self.events.0, &mut input)
+        let n = read_fd(self.events.raw(), &mut input)
             .map_err(|_| "Cannot read Steam's cached state file.")?;
         for line in input[..n].split(|b| *b == b'\n') {
             if line == b"populated 1" {
@@ -75,7 +78,7 @@ impl Cache {
             Err(-2) => return Ok(true),
             Err(_) => return Err("Cannot check the current Steam group."),
         };
-        let cached = stat(self.directory.0 as usize, b"\0".as_ptr(), 0x1000)
+        let cached = stat(self.directory.raw() as usize, b"\0".as_ptr(), 0x1000)
             .map_err(|_| "Cannot check the cached Steam group.")?;
         Ok(same(&current, &cached))
     }
@@ -93,8 +96,9 @@ impl Cache {
                     }
                     return Err("Steam's cgroup was replaced.");
                 }
-                rewind(self.directory.0).map_err(|_| "Cannot rewind Steam's cached directory.")?;
-                work(self.directory.0)?;
+                rewind(self.directory.raw())
+                    .map_err(|_| "Cannot rewind Steam's cached directory.")?;
+                work(self.directory.raw())?;
                 Ok(true)
             })();
             match result {
@@ -143,9 +147,8 @@ fn thread_group(directory: i32, data: &mut [u8; 16384], root: &[u8]) -> Result<b
         .split(|b| *b == b'\n')
         .any(|s| s.starts_with(b"0::") && member(&s[3..], root)))
 }
-fn correct(tid: u32, root: &[u8], scratch: &mut [u8; 16384]) -> Result<()> {
-    // The raw getpriority syscall returns 20 - nice, so nice -19 is 39.
-    let priority = unsafe { call(140, 0, tid as usize, 0, 0, 0, 0) };
+fn correct(tid: Tid, root: &[u8], scratch: &mut [u8; 16384]) -> Result<()> {
+    let priority = get_priority(tid);
     if priority == 39 || priority == -3 {
         return Ok(());
     }
@@ -154,18 +157,18 @@ fn correct(tid: u32, root: &[u8], scratch: &mut [u8; 16384]) -> Result<()> {
     }
     let mut path = Buffer::<64>::new();
     path.append(b"/proc/")?;
-    path.number(tid as u64)?;
+    path.number(tid.get() as u64)?;
     let directory = match openat(AT_FDCWD, path.ptr(), RDONLY | DIRECTORY | NOFOLLOW, 0) {
         Ok(fd) => fd,
         Err(-2) | Err(-3) => return Ok(()),
         Err(_) => return Err("Cannot open a Steam thread."),
     };
-    let original = match stat(directory.0 as usize, b"\0".as_ptr(), 0x1000) {
+    let original = match stat(directory.raw() as usize, b"\0".as_ptr(), 0x1000) {
         Ok(s) => s,
         Err(-2) | Err(-3) => return Ok(()),
         Err(_) => return Err("Cannot inspect a Steam thread."),
     };
-    if original.uid != uid() || !thread_group(directory.0, scratch, root)? {
+    if original.uid != uid() || !thread_group(directory.raw(), scratch, root)? {
         return Ok(());
     }
     let current = match stat(AT_FDCWD, path.ptr(), 0x100) {
@@ -176,7 +179,7 @@ fn correct(tid: u32, root: &[u8], scratch: &mut [u8; 16384]) -> Result<()> {
     if !same(&original, &current) {
         return Ok(());
     }
-    let rc = unsafe { call(141, 0, tid as usize, (-19isize) as usize, 0, 0, 0) };
+    let rc = set_high_priority(tid);
     if rc == 0 || rc == -3 {
         Ok(())
     } else {
@@ -203,7 +206,7 @@ fn correct_file(
     let mut value = 0u64;
     let mut digits = false;
     loop {
-        let n = read(fd.0, input);
+        let n = read(fd.raw(), input);
         if n < 0 {
             return Err("Cannot read Steam's thread list.");
         }
@@ -221,8 +224,8 @@ fn correct_file(
                 }
                 digits = true;
             } else if b.is_ascii_whitespace() {
-                if digits && value > 0 {
-                    if let Err(message) = correct(value as u32, root, scratch) {
+                if let Some(tid) = Tid::new(value as u32) {
+                    if let Err(message) = correct(tid, root, scratch) {
                         issue.get_or_insert(message);
                     }
                 }
@@ -233,9 +236,11 @@ fn correct_file(
             }
         }
     }
-    if digits && value > 0 {
-        if let Err(message) = correct(value as u32, root, scratch) {
-            issue.get_or_insert(message);
+    if digits {
+        if let Some(tid) = Tid::new(value as u32) {
+            if let Err(message) = correct(tid, root, scratch) {
+                issue.get_or_insert(message);
+            }
         }
     }
     Ok(())
@@ -258,23 +263,8 @@ fn scan(
         loop {
             let level = &mut levels[depth];
             if level.pos == level.end {
-                let n = unsafe {
-                    call(
-                        217,
-                        level.fd as usize,
-                        level.data.as_mut_ptr() as usize,
-                        level.data.len(),
-                        0,
-                        0,
-                        0,
-                    )
-                };
-                if n == -4 {
-                    continue;
-                }
-                if n < 0 {
-                    return Err("Cannot enumerate Steam's nested cgroups.");
-                }
+                let n = directory_entries(level.fd, &mut level.data)
+                    .map_err(|_| "Cannot enumerate Steam's nested cgroups.")?;
                 if n == 0 {
                     if depth == 0 {
                         break;
@@ -285,34 +275,18 @@ fn scan(
                     continue;
                 }
                 level.pos = 0;
-                level.end = n as usize;
+                level.end = n;
             }
-            let offset = level.pos;
-            if offset + 19 > level.end {
-                return Err("Invalid directory record.");
-            }
-            let length =
-                u16::from_ne_bytes([level.data[offset + 16], level.data[offset + 17]]) as usize;
-            if length < 20 || offset + length > level.end {
-                return Err("Invalid directory record.");
-            }
-            level.pos += length;
-            let dtype = level.data[offset + 18];
-            if dtype != 4 && dtype != 0 {
+            let entry = dirent::next(&level.data[..level.end], &mut level.pos)?;
+            if entry.kind != 4 && entry.kind != 0 {
                 continue;
             }
-            let tail = &level.data[offset + 19..offset + length];
-            let name_end = tail
-                .iter()
-                .position(|b| *b == 0)
-                .ok_or("Invalid directory name.")?;
-            let name = &tail[..name_end];
-            if name == b"." || name == b".." {
+            if matches!(entry.name, b".\0" | b"..\0") {
                 continue;
             }
             let child = match openat(
                 level.fd as usize,
-                tail.as_ptr(),
+                entry.name.as_ptr(),
                 RDONLY | DIRECTORY | NOFOLLOW,
                 0,
             ) {
@@ -324,8 +298,7 @@ fn scan(
                 return Err("Steam's cgroup depth exceeds the fixed limit of 32.");
             }
             depth += 1;
-            levels[depth].fd = child.0;
-            core::mem::forget(child);
+            levels[depth].fd = child.into_raw();
             levels[depth].pos = 0;
             levels[depth].end = 0;
             correct_file(levels[depth].fd, root, input, scratch, issue)?;
